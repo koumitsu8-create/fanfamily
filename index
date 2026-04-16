@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Family Connect - fanfamily</title>
+    <script src="https://cdn.npmmirror.com/@skyway-sdk/room/dist/skyway_room.js"></script>
+    <style>
+        body { margin: 0; background: #1a1a1a; color: white; font-family: "Helvetica Neue", Arial, sans-serif; text-align: center; }
+        #video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; padding: 20px; }
+        video { width: 100%; border-radius: 12px; background: #000; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .status-bar { padding: 15px; background: #333; font-weight: bold; border-bottom: 2px solid #444; }
+        .video-wrapper { position: relative; }
+        .label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="status-bar" id="status-msg">合言葉を入力してください</div>
+    <div id="video-grid">
+        <div class="video-wrapper">
+            <span class="label">自分のカメラ</span>
+            <video id="local-video" muted playsinline></video>
+        </div>
+    </div>
+
+    <script>
+        const CONFIG = {
+            MY_PASS: "コウ",
+            APP_ID: "519f9f9c-1a4d-47ab-a45d-e450ebdea8a6",
+            ROOM_NAME: "fanfamily-global-room"
+        };
+
+        const userInput = prompt("合言葉（パスワード）を入力してください");
+       
+        if (userInput !== CONFIG.MY_PASS) {
+            alert("合言葉が正しくありません。");
+            window.stop();
+        } else {
+            // 24時間ごとの自動リフレッシュ（長期稼働の安定用）
+            setTimeout(() => location.reload(), 24 * 60 * 60 * 1000);
+            init();
+        }
+
+        async function init() {
+            const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = SkyWayRoom;
+            const status = document.getElementById('status-msg');
+           
+            try {
+                // 画質設定：QVGA（320x240）は月500GBの無料枠に余裕で収まる設定です [cite: 5, 23, 448]
+                const { audio, video } = await SkyWayStreamFactory.createMicrophoneAudioAndCameraVideoStreams({
+                    video: { width: 320, height: 240, frameRate: 15 }
+                });
+               
+                const localVideo = document.getElementById('local-video');
+                localVideo.srcObject = video.track;
+                localVideo.play();
+
+                const context = await SkyWayContext.Create({ key: CONFIG.APP_ID });
+                const room = await SkyWayRoom.FindOrCreate(context, {
+                    type: 'sfu', // 複数人接続に適したSFUモードを選択 [cite: 361, 362]
+                    name: CONFIG.ROOM_NAME
+                });
+                const me = await room.join();
+                status.innerText = "接続完了：ご家族がURLを開くのを待っています...";
+
+                // 自分の映像をグループに公開
+                await me.publish(audio);
+                await me.publish(video);
+
+                // 他の参加者が入ってきた際に自動で映像を表示する処理
+                const subscribe = async (publication) => {
+                    if (publication.publisher.id === me.id) return;
+                   
+                    const { stream } = await me.subscribe(publication.id);
+                    let el = document.getElementById(`video-${publication.publisher.id}`);
+                   
+                    if (!el) {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'video-wrapper';
+                        const label = document.createElement('span');
+                        label.className = 'label';
+                        label.innerText = "家族のカメラ";
+                       
+                        el = document.createElement(stream.contentType === 'video' ? 'video' : 'audio');
+                        el.id = `video-${publication.publisher.id}`;
+                        el.playsInline = true;
+                        el.autoplay = true;
+                       
+                        wrapper.appendChild(label);
+                        wrapper.appendChild(el);
+                        document.getElementById('video-grid').appendChild(wrapper);
+                    }
+                    stream.attach(el);
+                };
+
+                room.onPublicationAttributesChanged.add(({ publication }) => subscribe(publication));
+                room.publications.forEach(subscribe);
+               
+                room.onMemberLeft.add((member) => {
+                    const el = document.getElementById(`video-${member.id}`);
+                    if (el && el.parentNode) el.parentNode.remove();
+                });
+
+            } catch (e) {
+                console.error(e);
+                status.innerText = "エラーが発生しました。カメラの許可を確認してください。";
+            }
+        }
+    </script>
+</body>
+</html>
