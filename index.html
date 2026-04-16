@@ -6,15 +6,36 @@
     <script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/room/dist/skyway_room-latest.js"></script>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; text-align: center; }
+        
+        /* 💡追加：操作パネルのデザイン */
+        .controls { background: #222; padding: 15px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; border-bottom: 2px solid #444; }
+        .btn { padding: 10px 20px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; font-size: 14px; transition: 0.2s; }
+        .btn:hover { opacity: 0.8; }
+        .btn-on { background: #4CAF50; color: white; }
+        .btn-off { background: #f44336; color: white; }
+        .btn-action { background: #2196F3; color: white; }
+        .volume-ctrl { display: flex; align-items: center; gap: 5px; font-weight: bold; font-size: 14px; background: #333; padding: 5px 15px; border-radius: 8px; }
+        
         #video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; padding: 20px; }
         video { width: 100%; border-radius: 12px; background: #000; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        .status-bar { padding: 15px; background: #333; font-weight: bold; border-bottom: 2px solid #444; }
-        .video-wrapper { position: relative; }
-        .label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        audio { width: 100%; margin-top: 10px; border-radius: 20px; }
+        .status-bar { padding: 15px; background: #333; font-weight: bold; border-bottom: 2px solid #222; }
+        .video-wrapper { position: relative; display: flex; flex-direction: column; }
+        .label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 4px 10px; border-radius: 6px; font-size: 12px; z-index: 10; }
     </style>
 </head>
 <body>
     <div class="status-bar" id="status-msg">合言葉を入力してください</div>
+    
+    <div class="controls" id="controls" style="display: none;">
+        <button id="toggle-cam" class="btn btn-on">カメラ：オン</button>
+        <button id="toggle-mic" class="btn btn-on">マイク：オン</button>
+        <div class="volume-ctrl">
+            音量：<input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1">
+        </div>
+        <button id="force-play" class="btn btn-action">🔊 音が出ない時の強制ボタン</button>
+    </div>
+
     <div id="video-grid">
         <div class="video-wrapper">
             <span class="label">自分のカメラ</span>
@@ -43,7 +64,7 @@
             const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = skyway_room;
 
             try {
-                // 1. カメラとマイクの取得（マニュアル通りの最新メソッドに変更）
+                // 1. カメラとマイクの取得
                 const localVideo = document.getElementById('local-video');
                 const { audio, video } = await SkyWayStreamFactory.createMicrophoneAudioAndCameraStream({
                     video: { width: 320, height: 240, frameRate: 15 }
@@ -52,18 +73,61 @@
                 video.attach(localVideo);
                 await localVideo.play();
 
-                // 2. SkyWayへの接続（マニュアル記載の簡単・確実な認証方式に変更）
+                // 💡追加：認証に成功したら操作パネルを表示する
+                document.getElementById('controls').style.display = 'flex';
+
+                // --- 🎛️ 操作パネルの機能実装 ---
+                // ① カメラのオンオフ
+                let isCamOn = true;
+                const btnCam = document.getElementById('toggle-cam');
+                btnCam.onclick = () => {
+                    isCamOn = !isCamOn;
+                    video.track.enabled = isCamOn; // トラックを一時停止・再開
+                    btnCam.innerText = isCamOn ? 'カメラ：オン' : 'カメラ：オフ';
+                    btnCam.className = isCamOn ? 'btn btn-on' : 'btn btn-off';
+                };
+
+                // ② マイクのオンオフ
+                let isMicOn = true;
+                const btnMic = document.getElementById('toggle-mic');
+                btnMic.onclick = () => {
+                    isMicOn = !isMicOn;
+                    audio.track.enabled = isMicOn; // トラックを一時停止・再開
+                    btnMic.innerText = isMicOn ? 'マイク：オン' : 'マイク：オフ';
+                    btnMic.className = isMicOn ? 'btn btn-on' : 'btn btn-off';
+                };
+
+                // ③ 音量の調整
+                document.getElementById('volume-slider').oninput = (e) => {
+                    const vol = e.target.value;
+                    // 相手の音声・映像タグすべての音量を一括調整
+                    document.querySelectorAll('video, audio').forEach(el => {
+                        if (el.id !== 'local-video') el.volume = vol;
+                    });
+                };
+
+                // ④ 強制再生ボタン（ブラウザの自動再生ブロックを突破する）
+                document.getElementById('force-play').onclick = () => {
+                    document.querySelectorAll('video, audio').forEach(el => {
+                        if (el.play) {
+                            el.play().catch(err => console.warn(err));
+                        }
+                    });
+                    alert("強制的に音声を再生しました。");
+                };
+                // ------------------------------
+
+                // 2. SkyWayへの接続
                 const context = await SkyWayContext.CreateForDevelopment(CONFIG.APP_ID, CONFIG.SECRET_KEY);
                 const room = await SkyWayRoom.FindOrCreate(context, { type: 'sfu', name: CONFIG.ROOM_NAME });
                 const me = await room.join();
                 
                 status.innerText = "接続完了：ご家族がURLを開くのを待っています...";
 
-                // 自分の映像・音声を配信
                 await me.publish(audio);
                 await me.publish(video);
 
-                // 3. 相手の映像を受信して表示
+                // 3. 相手の映像・音声を受信して表示
                 const subscribeAndAttach = async (publication) => {
                     if (publication.publisher.id === me.id) return;
                     
@@ -74,24 +138,33 @@
                         const wrapper = document.createElement('div');
                         wrapper.className = 'video-wrapper';
                         
-                        // マニュアル通りの映像/音声判定処理
-                        el = document.createElement(stream.track.kind === 'video' ? 'video' : 'audio');
+                        if (stream.track.kind === 'video') {
+                            el = document.createElement('video');
+                            el.playsInline = true;
+                        } else {
+                            el = document.createElement('audio');
+                            el.controls = true; // 個別操作用のパネルも念のため表示
+                        }
+                        
                         el.id = `media-${publication.id}`;
-                        el.playsInline = true; 
                         el.autoplay = true;
                         
                         wrapper.appendChild(el);
                         document.getElementById('video-grid').appendChild(wrapper);
                     }
                     stream.attach(el);
+                    
+                    // 初期段階で自動再生を試みる
+                    if(el.play) {
+                        el.play().catch(() => {
+                            // 失敗した場合は何もしない（ユーザーに強制ボタンを押してもらう）
+                        });
+                    }
                 };
 
-                // 既に入室している人の映像を取得
                 room.publications.forEach(subscribeAndAttach);
-                // 新しく入室した人の映像を取得
                 room.onStreamPublished.add((e) => subscribeAndAttach(e.publication));
                 
-                // 相手が退出した時の処理
                 room.onStreamUnpublished.add((e) => {
                     document.getElementById(`media-${e.publication.id}`)?.parentNode?.remove();
                 });
