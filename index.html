@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <title>Family Connect - fanfamily</title>
     <script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/room/dist/skyway_room-latest.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/token/dist/skyway_token-latest.js"></script>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; text-align: center; }
         #video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; padding: 20px; }
@@ -42,65 +41,64 @@
         async function init() {
             const status = document.getElementById('status-msg');
             const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = skyway_room;
-            const { SkyWayAuthToken, uuidV4, nowInSec } = skyway_token;
 
             try {
-                // 1. カメラとマイクの取得
-                const { audio, video } = await SkyWayStreamFactory.createMicrophoneAudioAndCameraVideoStreams({
+                // 1. カメラとマイクの取得（マニュアル通りの最新メソッドに変更）
+                const localVideo = document.getElementById('local-video');
+                const { audio, video } = await SkyWayStreamFactory.createMicrophoneAudioAndCameraStream({
                     video: { width: 320, height: 240, frameRate: 15 }
                 });
-                document.getElementById('local-video').srcObject = video.track;
-                document.getElementById('local-video').play();
+                
+                video.attach(localVideo);
+                await localVideo.play();
 
-                // 2. 認証トークンの生成
-                const token = new SkyWayAuthToken({
-                    jti: uuidV4(), iat: nowInSec(), exp: nowInSec() + 60 * 60 * 24,
-                    scope: {
-                        app: {
-                            id: CONFIG.APP_ID, turn: true, actions: ['read'],
-                            channels: [{
-                                id: '*', name: '*', actions: ['write'],
-                                members: [{
-                                    id: '*', name: '*', actions: ['write'],
-                                    publication: { actions: ['write'] },
-                                    subscription: { actions: ['write'] },
-                                }],
-                                sfuBots: [{ actions: ['write'], forwardings: [{ actions: ['write'] }] }],
-                            }],
-                        },
-                    },
-                }).encode(CONFIG.SECRET_KEY);
-
-                // 3. SkyWayへの接続
-                const context = await SkyWayContext.Create(token);
+                // 2. SkyWayへの接続（マニュアル記載の簡単・確実な認証方式に変更）
+                const context = await SkyWayContext.CreateForDevelopment(CONFIG.APP_ID, CONFIG.SECRET_KEY);
                 const room = await SkyWayRoom.FindOrCreate(context, { type: 'sfu', name: CONFIG.ROOM_NAME });
                 const me = await room.join();
+                
                 status.innerText = "接続完了：ご家族がURLを開くのを待っています...";
 
+                // 自分の映像・音声を配信
                 await me.publish(audio);
                 await me.publish(video);
 
-                // 4. 相手の映像を表示
-                const subscribe = async (publication) => {
+                // 3. 相手の映像を受信して表示
+                const subscribeAndAttach = async (publication) => {
                     if (publication.publisher.id === me.id) return;
+                    
                     const { stream } = await me.subscribe(publication.id);
-                    let el = document.getElementById(`video-${publication.publisher.id}`);
+                    let el = document.getElementById(`media-${publication.id}`);
+                    
                     if (!el) {
                         const wrapper = document.createElement('div');
                         wrapper.className = 'video-wrapper';
-                        el = document.createElement(stream.contentType === 'video' ? 'video' : 'audio');
-                        el.id = `video-${publication.publisher.id}`;
-                        el.playsInline = true; el.autoplay = true;
+                        
+                        // マニュアル通りの映像/音声判定処理
+                        el = document.createElement(stream.track.kind === 'video' ? 'video' : 'audio');
+                        el.id = `media-${publication.id}`;
+                        el.playsInline = true; 
+                        el.autoplay = true;
+                        
                         wrapper.appendChild(el);
                         document.getElementById('video-grid').appendChild(wrapper);
                     }
                     stream.attach(el);
                 };
-                room.onPublicationAttributesChanged.add(({ publication }) => subscribe(publication));
-                room.publications.forEach(subscribe);
+
+                // 既に入室している人の映像を取得
+                room.publications.forEach(subscribeAndAttach);
+                // 新しく入室した人の映像を取得
+                room.onStreamPublished.add((e) => subscribeAndAttach(e.publication));
+                
+                // 相手が退出した時の処理
+                room.onStreamUnpublished.add((e) => {
+                    document.getElementById(`media-${e.publication.id}`)?.parentNode?.remove();
+                });
+
             } catch (e) {
-                alert("エラー: " + e.message);
-                status.innerText = "エラーが発生しました。カメラの許可を確認してください。";
+                alert("【エラー内容】\n" + e.message);
+                status.innerText = "エラーが発生しました。カメラとマイクの許可を確認してください。";
             }
         }
     </script>
