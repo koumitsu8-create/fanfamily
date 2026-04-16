@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Family Connect - fanfamily</title>
-    <script src="https://cdn.npmmirror.com/@skyway-sdk/room/dist/skyway_room.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/room/dist/skyway_room.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/token/dist/skyway_token.js"></script>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: "Helvetica Neue", Arial, sans-serif; text-align: center; }
         #video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; padding: 20px; }
@@ -23,68 +24,109 @@
     </div>
 
     <script>
+        // --- 設定情報 ---
         const CONFIG = {
             MY_PASS: "コウ",
             APP_ID: "ccd67f44-d9e7-4e05-aa77-477a7ac1e160",
+            SECRET_KEY: "DFWskGkiYny+I6E8IzdDzE/zRVrDuavLQrJV6CqWzIA=", // ←★追加：コンソールからコピーしたものを入れます
             ROOM_NAME: "fanfamily-global-room"
         };
 
         const userInput = prompt("合言葉（パスワード）を入力してください");
-       
+        
         if (userInput !== CONFIG.MY_PASS) {
             alert("合言葉が正しくありません。");
             window.stop();
         } else {
-            // 24時間ごとの自動リフレッシュ（長期稼働の安定用）
             setTimeout(() => location.reload(), 24 * 60 * 60 * 1000);
             init();
         }
 
         async function init() {
-            const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = SkyWayRoom;
             const status = document.getElementById('status-msg');
-           
+            
+            // SkyWayの機能群を取得
+            const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = skyway_room;
+            const { SkyWayAuthToken, uuidV4, nowInSec } = skyway_token;
+
             try {
-                // 画質設定：QVGA（320x240）は月500GBの無料枠に余裕で収まる設定です [cite: 5, 23, 448]
+                // 1. カメラとマイクの準備（QVGA画質）
                 const { audio, video } = await SkyWayStreamFactory.createMicrophoneAudioAndCameraVideoStreams({
                     video: { width: 320, height: 240, frameRate: 15 }
                 });
-               
+                
                 const localVideo = document.getElementById('local-video');
                 localVideo.srcObject = video.track;
                 localVideo.play();
 
-                const context = await SkyWayContext.Create({ key: CONFIG.APP_ID });
+                // 2. SkyWay v3の認証トークン生成（★修正の肝）
+                const token = new SkyWayAuthToken({
+                    jti: uuidV4(),
+                    iat: nowInSec(),
+                    exp: nowInSec() + 60 * 60 * 24, // トークンの有効期限を24時間に設定
+                    scope: {
+                        app: {
+                            id: CONFIG.APP_ID,
+                            turn: true,
+                            actions: ['read'],
+                            channels: [
+                                {
+                                    id: '*',
+                                    name: '*',
+                                    actions: ['write'],
+                                    members: [
+                                        {
+                                            id: '*',
+                                            name: '*',
+                                            actions: ['write'],
+                                            publication: { actions: ['write'] },
+                                            subscription: { actions: ['write'] },
+                                        },
+                                    ],
+                                    sfuBots: [
+                                        {
+                                            actions: ['write'],
+                                            forwardings: [{ actions: ['write'] }],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                }).encode(CONFIG.SECRET_KEY);
+
+                // 3. SkyWayへの正式な接続
+                const context = await SkyWayContext.Create(token);
                 const room = await SkyWayRoom.FindOrCreate(context, {
-                    type: 'sfu', // 複数人接続に適したSFUモードを選択 [cite: 361, 362]
+                    type: 'sfu',
                     name: CONFIG.ROOM_NAME
                 });
+                
                 const me = await room.join();
                 status.innerText = "接続完了：ご家族がURLを開くのを待っています...";
 
-                // 自分の映像をグループに公開
                 await me.publish(audio);
                 await me.publish(video);
 
-                // 他の参加者が入ってきた際に自動で映像を表示する処理
+                // 4. 家族が入室したときの処理
                 const subscribe = async (publication) => {
                     if (publication.publisher.id === me.id) return;
-                   
+                    
                     const { stream } = await me.subscribe(publication.id);
                     let el = document.getElementById(`video-${publication.publisher.id}`);
-                   
+                    
                     if (!el) {
                         const wrapper = document.createElement('div');
                         wrapper.className = 'video-wrapper';
                         const label = document.createElement('span');
                         label.className = 'label';
                         label.innerText = "家族のカメラ";
-                       
+                        
                         el = document.createElement(stream.contentType === 'video' ? 'video' : 'audio');
                         el.id = `video-${publication.publisher.id}`;
                         el.playsInline = true;
                         el.autoplay = true;
-                       
+                        
                         wrapper.appendChild(label);
                         wrapper.appendChild(el);
                         document.getElementById('video-grid').appendChild(wrapper);
@@ -94,7 +136,7 @@
 
                 room.onPublicationAttributesChanged.add(({ publication }) => subscribe(publication));
                 room.publications.forEach(subscribe);
-               
+                
                 room.onMemberLeft.add((member) => {
                     const el = document.getElementById(`video-${member.id}`);
                     if (el && el.parentNode) el.parentNode.remove();
@@ -102,7 +144,7 @@
 
             } catch (e) {
                 console.error(e);
-                status.innerText = "エラーが発生しました。カメラの許可を確認してください。";
+                status.innerText = "エラーが発生しました。設定とシークレットキーを確認してください。";
             }
         }
     </script>
